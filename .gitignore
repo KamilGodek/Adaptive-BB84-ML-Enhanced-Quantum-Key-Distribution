@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# C/C++
+*.o
+*.obj
+*.exe
+build/
+cmake-build-*/
+
+# VSCode
+.vscode/
+
+# Visual Studio
+.vs/
+
+# Idea / JetBrains
+.idea/
+
+# Misc
+.DS_Store
