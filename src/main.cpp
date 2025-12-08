@@ -17,23 +17,28 @@ std::uniform_int_distribution<> bit_dist(0, 1); // Generuje 0 lub 1
 std::uniform_real_distribution<> prob_dist(0.0, 1.0); // Generuje wartość [0, 1)
 
 
-void record_data(double qber, double attack_intensity, const std::string& filename = "training_data.csv"){
+// --- NOWA FUNKCJA: CZYŚCI PLIK I DODAJĄCA NAGŁÓWEK (WYWOŁYWANA RAZ) ---
+void initialize_data_file(const std::string& filename = "../data/training_data.csv") {
+    // std::ios::out bez std::ios::app -> OTWÓRZ I USUŃ POPRZEDNIĄ ZAWARTOŚĆ
+    std::fstream file(filename, std::ios::out); 
+    file << "QBER_Value,Attack_Detected\n"; // Zapis nagłówka
+    file.close();
+}
 
-    // std::ios::out   - otwórz do zapisu;   std::ios::app 
-    std::fstream file(filename, std::ios::out | std::ios::app);
 
-    // Jesli plik jest pusty, dodaj nagłówek
+// --- ZMODYFIKOWANA FUNKCJA: TYLKO DOKLEJA DANE ---
+void record_data(double qber, double attack_intensity, const std::string& filename = "../data/training_data.csv"){
 
-    if(file.tellp() == 0 ){
-        file << "QBER_Value,Attack_detected\n";
-    }
+    // Używamy TYLKO std::ios::app, aby uniknąć problemu z powtarzającymi się nagłówkami
+    std::fstream file(filename, std::ios::app);
+
+    // USUNIĘTO BŁĘDNĄ LOGIKĘ: if(file.tellp() == 0 ){...}
 
     // zapisz QBER i flagę ataku (1 jeśli attack_intensity > 0, 0 w przeciwnym razie )
     file << qber << "," << (attack_intensity >0.0 ? 1 : 0) << "\n";
 
     file.close();
 }
-
 
 
 namespace BB84 {
@@ -139,6 +144,9 @@ int main() {
     const int QUBITS_PER_RUN = 5000; // Dlugosc klucza w pojedynczym eksperymencie
     const double NATURAL_NOISE = 0.01; // Stały szum kanału (1%)
 
+    // --- POPRAWKA: WYWOŁANIE FUNKCJI CZYSZCZĄCEJ PRZED PĘTLĄ ---
+    initialize_data_file();
+
     std::cout<<"Rozpoczynam generowanie danych treningowych( " << NUM_RUNS << " przebiegów)....\n";
 
     for(int run = 0; run <NUM_RUNS; ++run){
@@ -161,12 +169,14 @@ int main() {
             transmitted_qubits.push_back(q_trans);
         }
 // --- Etap 2 & 3: Pomiar i Przesiewanie ---
+        // POPRAWKA: Prawidłowa inicjalizacja dwóch wektorów
         std::vector<int> katarzyna_bases(QUBITS_PER_RUN);
-        std::vector<int> katarzyna_results(QUBITS_PER_RUN);
+        std::vector<int> katarzyna_results(QUBITS_PER_RUN); // WAŻNE: Wektor na wyniki pomiaru!
 
         for(int i = 0; i < QUBITS_PER_RUN; ++i){
             
-            katarzyna_bases[i]= BB84::measure_qubit(transmitted_qubits[i],katarzyna_bases[i]);
+            // POPRAWKA BŁĘDU LOGICZNEGO: Wynik pomiaru trafia do katarzyna_results[i]
+            katarzyna_results[i] = BB84::measure_qubit(transmitted_qubits[i],katarzyna_bases[i]);
         }
 
         std::vector<int> raw_key_kamil;
