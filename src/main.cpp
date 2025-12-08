@@ -5,6 +5,9 @@
 #include <random>       // Dla definicji generatorów (np. std::random_device rd;)
 #include <vector>       // Chociaż w BB84.hpp, dla pewności i czystości kodu
 #include <algorithm>    // Dla std::min
+#include <fstream>
+#include <string>
+
 
 // Globalne generatory dla losowości - UŻYWAJĄ std::
 // Zmienne te są globalne i dostępne dla funkcji w namespace BB84 i main()
@@ -12,6 +15,26 @@ std::random_device rd;
 std::mt19937 generator(rd());
 std::uniform_int_distribution<> bit_dist(0, 1); // Generuje 0 lub 1
 std::uniform_real_distribution<> prob_dist(0.0, 1.0); // Generuje wartość [0, 1)
+
+
+void record_data(double qber, double attack_intensity, const std::string& filename = "training_data.csv"){
+
+    // std::ios::out   - otwórz do zapisu;   std::ios::app 
+    std::fstream file(filename, std::ios::out | std::ios::app);
+
+    // Jesli plik jest pusty, dodaj nagłówek
+
+    if(file.tellp() == 0 ){
+        file << "QBER_Value,Attack_detected\n";
+    }
+
+    // zapisz QBER i flagę ataku (1 jeśli attack_intensity > 0, 0 w przeciwnym razie )
+    file << qber << "," << (attack_intensity >0.0 ? 1 : 0) << "\n";
+
+    file.close();
+}
+
+
 
 namespace BB84 {
 
@@ -23,9 +46,32 @@ namespace BB84 {
     }
 
 
-    Qubit send_qubit(const Qubit& q, double natural_noise_level) {     // 2. Kanał transmisyjny (szum naturalny).
+    Qubit send_qubit(const Qubit& q, double natural_noise_level, double attack_intensity) {     // 2. Kanał transmisyjny (szum naturalny).
         Qubit transmitted_q = q;
         
+
+        // 1.Podsłuch czyli atak intercept-resent
+        // thief przechwytuje kubit z prawdopodobienstwem rownym attack_intensity
+
+        if(prob_dist(generator) < attack_intensity){
+
+            //thief mierzy kubit w losowej bazie (jak katarzyna)
+            int thief_basis = bit_dist(generator);
+            int thief_result;
+
+            // Pomiar thief wprowadza blad w stan
+            if(q.basis == thief_basis){
+                thief_result = q.value; // zgodne bazy: sukces
+            }else{
+                thief_result = bit_dist(generator);// niezgodne bazy: 50% błędu
+            }
+
+            //thief tworzy nowy kubit i wysyla go dalej
+            transmitted_q.value = thief_result;
+            transmitted_q.basis = thief_basis;
+        }
+
+
         // Szum: z małym prawdopodobieństwem odwraca bit.
         if (prob_dist(generator) < natural_noise_level) {
             transmitted_q.value = 1 - transmitted_q.value; // Odwrócenie bitu
@@ -88,47 +134,60 @@ namespace BB84 {
 
 // Główna funkcja symulacji
 int main() {
-    // --- Ustawienia symulacji ---
-    const int NUM_QUBITS = 10000;
-    const double NATURAL_NOISE = 0.01; // 1% naturalnego szumu w kanale
-    
-    // --- Etap 1: Generacja i Transmisja ---
-    std::vector<Qubit> kamil_original; // Kubity wysłane przez Kamila
-    std::vector<Qubit> transmitted_qubits; // Kubity, które dotarły do Katarzyny
+// ustawienia symulacji
+    const int  NUM_RUNS = 2000; //liczba eksperymentów do zebrania danych
+    const int QUBITS_PER_RUN = 5000; // Dlugosc klucza w pojedynczym eksperymencie
+    const double NATURAL_NOISE = 0.01; // Stały szum kanału (1%)
 
-    for (int i = 0; i < NUM_QUBITS; ++i) {
-        Qubit q_orig = BB84::generate_qubit();
-        Qubit q_trans = BB84::send_qubit(q_orig, NATURAL_NOISE);
-        kamil_original.push_back(q_orig);
-        transmitted_qubits.push_back(q_trans);
+    std::cout<<"Rozpoczynam generowanie danych treningowych( " << NUM_RUNS << " przebiegów)....\n";
+
+    for(int run = 0; run <NUM_RUNS; ++run){
+        double attack_intensity = 0.0;
+
+        // Co drugie uruchomienie symulujemy atak ( 50% czysty, 50% atakowany)
+        if(run % 2 ==1){
+            //Atak subtelny: losowa intensywność od 1% do 15% przechwyconych kubitów
+            std::uniform_real_distribution<> attack_dist(0.01, 0.15);
+            attack_intensity = attack_dist(generator);
+        }
+
+        std::vector<Qubit> kamil_orginal;
+        std::vector<Qubit> transmitted_qubits;
+
+        for (int i = 0; i < QUBITS_PER_RUN; ++i) {
+            Qubit q_orig = BB84::generate_qubit();
+            Qubit q_trans = BB84::send_qubit(q_orig,NATURAL_NOISE, attack_intensity);
+            kamil_orginal.push_back(q_orig);
+            transmitted_qubits.push_back(q_trans);
+        }
+// --- Etap 2 & 3: Pomiar i Przesiewanie ---
+        std::vector<int> katarzyna_bases(QUBITS_PER_RUN);
+        std::vector<int> katarzyna_results(QUBITS_PER_RUN);
+
+        for(int i = 0; i < QUBITS_PER_RUN; ++i){
+            
+            katarzyna_bases[i]= BB84::measure_qubit(transmitted_qubits[i],katarzyna_bases[i]);
+        }
+
+        std::vector<int> raw_key_kamil;
+        std::vector<int> raw_key_katarzyna;
+        BB84::sifting(kamil_orginal, katarzyna_bases, katarzyna_results, raw_key_kamil, raw_key_katarzyna);
+
+      
+// Etap 4. obliczanie QBER
+
+        double qber = BB84::calculate_qber(raw_key_kamil, raw_key_katarzyna);
+
+        record_data(qber, attack_intensity);
+
+        if (run % 100 == 0) {
+            std::cout << "Przebieg " << run << "/" << NUM_RUNS << " zakończony. QBER: " << qber * 100.0 << "%. Atak: " 
+                      << (attack_intensity > 0.0 ? "TAK (Int: " + std::to_string(attack_intensity) + ")" : "NIE") << ".\n";
+        }
+
     }
     
-    std::cout << "1. Generacja i transmisja " << NUM_QUBITS << " kubitów zakończona.\n";
 
-    // --- Etap 2: Pomiar przez Katarzynę ---
-    std::vector<int> katarzyna_bases(NUM_QUBITS);
-    std::vector<int> katarzyna_results(NUM_QUBITS);
-
-    for (int i = 0; i < NUM_QUBITS; ++i) {
-        int katarzyna_basis = 0; // Zmienna tymczasowa dla katarzyna_basis
-        // Przekazujemy katarzyna_bases[i] do funkcji, aby zapisać wylosowaną bazę
-        katarzyna_results[i] = BB84::measure_qubit(transmitted_qubits[i], katarzyna_bases[i]); 
-    }
-    std::cout << "2. Katarzyna dokonała pomiarów.\n";
-
-    // --- Etap 3: Przesiewanie (Sifting) ---
-    std::vector<int> raw_key_kamil;
-    std::vector<int> raw_key_katarzyna;
-    
-    BB84::sifting(kamil_original, katarzyna_bases, katarzyna_results, raw_key_kamil, raw_key_katarzyna);
-
-    std::cout << "3. Przesiewanie baz zakończone. Długość Surowego Klucza (Raw Key): " 
-              << raw_key_kamil.size() << " bitów.\n";
-              
-    // --- Etap 4: Obliczenie QBER ---
-    double qber = BB84::calculate_qber(raw_key_kamil, raw_key_katarzyna);
-    
-    std::cout << "4. Obliczony QBER (szum naturalny): " << qber * 100.0 << "%\n";
-
+    std::cout<< "\n Generowanie danych zakończone. Dane treningowe w pliku training_data.csv\n";
     return 0;
 }
